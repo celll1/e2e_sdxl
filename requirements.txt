@@ -1,0 +1,13 @@
+torch>=2.0.0
+torchvision>=0.15.0
+transformers>=4.30.0
+diffusers>=0.21.0
+accelerate>=0.20.0
+einops>=0.6.0
+tqdm>=4.65.0
+tensorboard>=2.13.0
+pillow>=9.5.0
+numpy>=1.24.0
+flash-attn>=2.3.0  # Optional for memory efficiency
+xformers>=0.0.22  # Optional for memory efficiency
+bitsandbytes>=0.41.0  # Optional for 8-bit optimizer
