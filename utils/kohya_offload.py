@@ -212,14 +212,49 @@ class KohyaOffloadedE2EModel:
         blocks = self.sit_model.blocks
         total_blocks = len(blocks)
         
+        # Store blocks and embeddings for backward pass management
+        self._current_blocks = blocks
+        self._current_device = self.device
+        self._time_emb = time_emb  # Keep time_emb on GPU for gradient checkpointing
+        
         for i, block in enumerate(blocks):
             # Load current block to GPU
             self._ensure_model_on_device(block, f"SiT-block-{i}", self.device)
             
+            # Register both pre-backward and full-backward hooks for comprehensive device management
+            def create_pre_backward_hook(block_idx):
+                def pre_backward_hook(module, grad_output):
+                    # Ensure this block is on GPU before backward pass
+                    current_device = next(module.parameters()).device
+                    if current_device != self._current_device:
+                        if self.debug:
+                            logger.info(f"Pre-loading SiT block {block_idx} to GPU for backward pass")
+                        module.to(self._current_device)
+                return pre_backward_hook
+            
+            def create_backward_hook(block_idx):
+                def backward_hook(module, grad_input, grad_output):
+                    # Double-check that module is still on GPU
+                    current_device = next(module.parameters()).device
+                    if current_device != self._current_device:
+                        if self.debug:
+                            logger.info(f"Loading SiT block {block_idx} to GPU for backward pass")
+                        module.to(self._current_device)
+                    return grad_input
+                return backward_hook
+            
+            # Register both hooks
+            pre_hook = block.register_full_backward_pre_hook(create_pre_backward_hook(i))
+            post_hook = block.register_full_backward_hook(create_backward_hook(i))
+            
+            if not hasattr(self, '_backward_hooks'):
+                self._backward_hooks = []
+            self._backward_hooks.extend([pre_hook, post_hook])
+            
             # Forward through block (SiTBlock only takes x and time_emb)
             x = block(x, time_emb)
             
-            # Offload block after use (except last few blocks for gradients)
+            # Offload block after forward pass (except last few blocks for gradients)
             keep_on_gpu = i >= (total_blocks - self.blocks_to_keep_on_gpu)
             if not keep_on_gpu:
                 self._ensure_model_on_device(block, f"SiT-block-{i}", self.cpu_device)
@@ -494,6 +529,14 @@ class KohyaOffloadedE2EModel:
         """Finalize step with progressive block offloading after backward pass."""
         if self.debug:
             logger.info("Finalizing step with progressive block offloading")
+        
+        # Clean up backward hooks
+        if hasattr(self, '_backward_hooks'):
+            for hook in self._backward_hooks:
+                hook.remove()
+            del self._backward_hooks
+            if self.debug:
+                logger.info("Cleaned up backward hooks")
         
         # Progressive offloading for SiT transformer blocks
         if hasattr(self.sit_model, 'blocks'):

@@ -448,7 +448,7 @@ def train(args):
             enable_vae_training=args.train_vae,
             enable_text_encoder_training=args.train_text_encoder,
             mixed_precision=args.mixed_precision,
-            blocks_to_keep_on_gpu=2,  # Keep 2 SiT blocks on GPU
+            blocks_to_keep_on_gpu=4,  # Keep 4 SiT blocks on GPU for gradient compatibility
             debug=args.debug,
         )
     elif args.cpu_offload_mode in ["sequential", "full"]:
