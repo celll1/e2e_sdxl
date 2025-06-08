@@ -1,10 +1,6 @@
 """
 Model offloading utilities for memory-efficient training.
-<<<<<<< HEAD
-Based on techniques from kohya-ss/sd-scripts and OneTrainer.
-=======
-Independent implementation for CPU/GPU model management.
->>>>>>> fd5c51c (fixes)
+Based on techniques from kohya-ss/sd-scripts for layer-wise offloading.
 """
 
 import torch
@@ -74,6 +70,168 @@ class SequentialOffloader:
     def activate_module(self, modules: Dict[str, nn.Module], name: str):
         """Activate a specific module and offload others."""
         self.offload_all_except(modules, keep=name)
+
+
+class KohyaSequentialOffloader:
+    """
+    Kohya-style sequential offloading that supports block-wise offloading within models.
+    Based on kohya-ss/sd-scripts implementation for memory-efficient training.
+    """
+    
+    def __init__(self, device: torch.device = torch.device("cuda"), debug: bool = False):
+        self.device = device
+        self.cpu_device = torch.device("cpu")
+        self.debug = debug
+        self.current_blocks_on_gpu = []
+        
+    def offload_model_to_cpu(self, model: nn.Module, model_name: str = "model"):
+        """Offload entire model to CPU."""
+        if self.debug:
+            print(f"Offloading {model_name} to CPU")
+        model.to(self.cpu_device)
+        torch.cuda.empty_cache()
+    
+    def load_model_to_gpu(self, model: nn.Module, model_name: str = "model"):
+        """Load entire model to GPU."""
+        if self.debug:
+            print(f"Loading {model_name} to GPU")
+        model.to(self.device)
+        
+    def offload_blocks_to_cpu(self, model: nn.Module, block_names: List[str]):
+        """Offload specific blocks/layers to CPU."""
+        for block_name in block_names:
+            if hasattr(model, block_name):
+                block = getattr(model, block_name)
+                if isinstance(block, nn.ModuleList):
+                    # Handle ModuleList (like transformer blocks)
+                    for i, sub_block in enumerate(block):
+                        sub_block.to(self.cpu_device)
+                        if self.debug:
+                            print(f"Offloaded {block_name}[{i}] to CPU")
+                else:
+                    block.to(self.cpu_device)
+                    if self.debug:
+                        print(f"Offloaded {block_name} to CPU")
+        
+        # Remove from current GPU blocks list
+        self.current_blocks_on_gpu = [name for name in self.current_blocks_on_gpu 
+                                     if name not in block_names]
+        torch.cuda.empty_cache()
+    
+    def load_blocks_to_gpu(self, model: nn.Module, block_names: List[str]):
+        """Load specific blocks/layers to GPU."""
+        for block_name in block_names:
+            if hasattr(model, block_name):
+                block = getattr(model, block_name)
+                if isinstance(block, nn.ModuleList):
+                    # Handle ModuleList (like transformer blocks)
+                    for i, sub_block in enumerate(block):
+                        sub_block.to(self.device)
+                        if self.debug:
+                            print(f"Loaded {block_name}[{i}] to GPU")
+                else:
+                    block.to(self.device)
+                    if self.debug:
+                        print(f"Loaded {block_name} to GPU")
+        
+        # Add to current GPU blocks list
+        self.current_blocks_on_gpu.extend(block_names)
+        
+    def progressive_offload_transformer_blocks(self, model: nn.Module, 
+                                             blocks_attr: str = "blocks",
+                                             keep_on_gpu: int = 2):
+        """
+        Progressive offloading for transformer blocks - keeps only a few blocks on GPU.
+        Similar to kohya-ss approach for UNet blocks.
+        """
+        if not hasattr(model, blocks_attr):
+            if self.debug:
+                print(f"Model doesn't have {blocks_attr} attribute, skipping progressive offload")
+            return
+            
+        blocks = getattr(model, blocks_attr)
+        if not isinstance(blocks, nn.ModuleList):
+            if self.debug:
+                print(f"{blocks_attr} is not a ModuleList, skipping progressive offload")
+            return
+            
+        total_blocks = len(blocks)
+        
+        # Move most blocks to CPU, keep only specified number on GPU
+        blocks_to_offload = max(0, total_blocks - keep_on_gpu)
+        
+        for i in range(blocks_to_offload):
+            blocks[i].to(self.cpu_device)
+            if self.debug:
+                print(f"Offloaded {blocks_attr}[{i}] to CPU")
+        
+        # Keep last few blocks on GPU for faster access
+        for i in range(blocks_to_offload, total_blocks):
+            blocks[i].to(self.device)
+            if self.debug:
+                print(f"Keeping {blocks_attr}[{i}] on GPU")
+                
+        torch.cuda.empty_cache()
+        
+    def enable_block_wise_forward_hook(self, model: nn.Module, blocks_attr: str = "blocks"):
+        """
+        Enable block-wise forward hooks for automatic offloading during forward pass.
+        This mimics kohya-ss's approach for memory-efficient inference.
+        """
+        if not hasattr(model, blocks_attr):
+            return
+            
+        blocks = getattr(model, blocks_attr)
+        if not isinstance(blocks, nn.ModuleList):
+            return
+            
+        def create_forward_hook(block_idx):
+            def forward_hook(module, input, output):
+                # Move current block to CPU after forward pass
+                module.to(self.cpu_device)
+                
+                # Load next block to GPU if exists
+                if block_idx + 1 < len(blocks):
+                    blocks[block_idx + 1].to(self.device)
+                    
+                if self.debug:
+                    print(f"Block {block_idx}: moved to CPU, next block loaded to GPU")
+                    
+                return output
+            return forward_hook
+            
+        def create_pre_forward_hook(block_idx):
+            def pre_forward_hook(module, input):
+                # Ensure current block is on GPU before forward pass
+                module.to(self.device)
+                if self.debug:
+                    print(f"Block {block_idx}: loaded to GPU for forward pass")
+            return pre_forward_hook
+        
+        # Register hooks for all blocks
+        for i, block in enumerate(blocks):
+            block.register_forward_pre_hook(create_pre_forward_hook(i))
+            block.register_forward_hook(create_forward_hook(i))
+            
+        if self.debug:
+            print(f"Registered forward hooks for {len(blocks)} blocks")
+            
+    def cleanup_hooks(self, model: nn.Module, blocks_attr: str = "blocks"):
+        """Remove all forward hooks from blocks."""
+        if not hasattr(model, blocks_attr):
+            return
+            
+        blocks = getattr(model, blocks_attr)
+        if not isinstance(blocks, nn.ModuleList):
+            return
+            
+        for block in blocks:
+            # Remove all hooks
+            block._forward_pre_hooks.clear()
+            block._forward_hooks.clear()
+            
+        if self.debug:
+            print("Cleaned up all forward hooks")
 
 
 class GradientCheckpointingWrapper(nn.Module):

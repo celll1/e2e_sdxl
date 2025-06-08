@@ -31,10 +31,7 @@ class SimpleOffloadedE2EModel:
         enable_vae_training: bool = True,
         enable_text_encoder_training: bool = True,
         mixed_precision: bool = False,
-<<<<<<< HEAD
-=======
         debug: bool = False,
->>>>>>> fd5c51c (fixes)
     ):
         self.device = device
         self.cpu_device = torch.device("cpu")
@@ -43,10 +40,7 @@ class SimpleOffloadedE2EModel:
         self.enable_vae_training = enable_vae_training
         self.enable_text_encoder_training = enable_text_encoder_training
         self.mixed_precision = mixed_precision
-<<<<<<< HEAD
-=======
         self.debug = debug
->>>>>>> fd5c51c (fixes)
         
         # Store models
         self.sit_model = sit_model
@@ -74,23 +68,15 @@ class SimpleOffloadedE2EModel:
             for param in text_encoder_g.parameters():
                 param.requires_grad = False
                 
-<<<<<<< HEAD
-        logger.info("Initialized SimpleOffloadedE2EModel with all models on CPU")
-=======
         if self.debug:
             logger.info("Initialized SimpleOffloadedE2EModel with all models on CPU")
->>>>>>> fd5c51c (fixes)
     
     def _ensure_on_gpu(self, model: nn.Module, name: str):
         """Ensure model is on GPU."""
         current_device = next(model.parameters()).device
         if current_device != self.device:
-<<<<<<< HEAD
-            logger.info(f"Moving {name} from {current_device} to {self.device}")
-=======
             if self.debug:
                 logger.info(f"Moving {name} from {current_device} to {self.device}")
->>>>>>> fd5c51c (fixes)
             model.to(self.device)
             torch.cuda.empty_cache()
     
@@ -98,12 +84,8 @@ class SimpleOffloadedE2EModel:
         """Ensure model is on CPU."""
         current_device = next(model.parameters()).device
         if current_device != self.cpu_device:
-<<<<<<< HEAD
-            logger.info(f"Moving {name} from {current_device} to {self.cpu_device}")
-=======
             if self.debug:
                 logger.info(f"Moving {name} from {current_device} to {self.cpu_device}")
->>>>>>> fd5c51c (fixes)
             model.to(self.cpu_device)
             torch.cuda.empty_cache()
     
@@ -124,22 +106,14 @@ class SimpleOffloadedE2EModel:
             attention_mask_g = attention_mask_g.to(self.device)
         
         batch_size = images.shape[0]
-<<<<<<< HEAD
-        logger.info(f"Batch prepared, GPU memory: {torch.cuda.memory_allocated(self.device) / 1024**3:.2f} GB")
-=======
         if self.debug:
             logger.info(f"Batch prepared, GPU memory: {torch.cuda.memory_allocated(self.device) / 1024**3:.2f} GB")
->>>>>>> fd5c51c (fixes)
         
         # Step 1: VAE encoding
         step_start = time.time()
         self._ensure_on_gpu(self.vae, "VAE")
-<<<<<<< HEAD
-        logger.info(f"VAE on GPU, memory: {torch.cuda.memory_allocated(self.device) / 1024**3:.2f} GB")
-=======
         if self.debug:
             logger.info(f"VAE on GPU, memory: {torch.cuda.memory_allocated(self.device) / 1024**3:.2f} GB")
->>>>>>> fd5c51c (fixes)
         
         # Keep images in their original dtype for mixed precision
         images_vae = images
@@ -174,23 +148,15 @@ class SimpleOffloadedE2EModel:
         if not self.enable_vae_training:
             self._ensure_on_cpu(self.vae, "VAE")
         
-<<<<<<< HEAD
-        logger.info(f"VAE encoding done in {time.time() - step_start:.2f}s, memory: {torch.cuda.memory_allocated(self.device) / 1024**3:.2f} GB")
-=======
         if self.debug:
             logger.info(f"VAE encoding done in {time.time() - step_start:.2f}s, memory: {torch.cuda.memory_allocated(self.device) / 1024**3:.2f} GB")
->>>>>>> fd5c51c (fixes)
         
         # Step 2: Text encoding
         step_start = time.time()
         self._ensure_on_gpu(self.text_encoder_l, "CLIP-L")
         self._ensure_on_gpu(self.text_encoder_g, "CLIP-G")
-<<<<<<< HEAD
-        logger.info(f"Text encoders on GPU, memory: {torch.cuda.memory_allocated(self.device) / 1024**3:.2f} GB")
-=======
         if self.debug:
             logger.info(f"Text encoders on GPU, memory: {torch.cuda.memory_allocated(self.device) / 1024**3:.2f} GB")
->>>>>>> fd5c51c (fixes)
         
         # Text encoding with autocast if mixed precision is enabled
         if self.mixed_precision:
@@ -277,12 +243,8 @@ class SimpleOffloadedE2EModel:
             self._ensure_on_cpu(self.text_encoder_l, "CLIP-L")
             self._ensure_on_cpu(self.text_encoder_g, "CLIP-G")
         
-<<<<<<< HEAD
-        logger.info(f"Text encoding done in {time.time() - step_start:.2f}s, memory: {torch.cuda.memory_allocated(self.device) / 1024**3:.2f} GB")
-=======
         if self.debug:
             logger.info(f"Text encoding done in {time.time() - step_start:.2f}s, memory: {torch.cuda.memory_allocated(self.device) / 1024**3:.2f} GB")
->>>>>>> fd5c51c (fixes)
         
         # Step 3: Noise and timesteps
         noise = torch.randn_like(latents, device=self.device)
@@ -298,12 +260,8 @@ class SimpleOffloadedE2EModel:
         # Step 5: SiT inference
         step_start = time.time()
         self._ensure_on_gpu(self.sit_model, "SiT-XL")
-<<<<<<< HEAD
-        logger.info(f"SiT model on GPU, memory: {torch.cuda.memory_allocated(self.device) / 1024**3:.2f} GB")
-=======
         if self.debug:
             logger.info(f"SiT model on GPU, memory: {torch.cuda.memory_allocated(self.device) / 1024**3:.2f} GB")
->>>>>>> fd5c51c (fixes)
         
         # Keep inputs in their original dtype for mixed precision
         noisy_latents_sit = noisy_latents
@@ -327,12 +285,8 @@ class SimpleOffloadedE2EModel:
                 pooled_embeds_sit,
             )
         
-<<<<<<< HEAD
-        logger.info(f"SiT inference done in {time.time() - step_start:.2f}s, memory: {torch.cuda.memory_allocated(self.device) / 1024**3:.2f} GB")
-=======
         if self.debug:
             logger.info(f"SiT inference done in {time.time() - step_start:.2f}s, memory: {torch.cuda.memory_allocated(self.device) / 1024**3:.2f} GB")
->>>>>>> fd5c51c (fixes)
         
         # Step 6: Calculate loss
         if self.noise_scheduler.prediction_type == "epsilon":
@@ -399,12 +353,8 @@ class SimpleOffloadedE2EModel:
         
         total_loss = diffusion_loss + 0.01 * vae_loss
         
-<<<<<<< HEAD
-        logger.info(f"Total training step: {time.time() - start_time:.2f}s, final memory: {torch.cuda.memory_allocated(self.device) / 1024**3:.2f} GB")
-=======
         if self.debug:
             logger.info(f"Total training step: {time.time() - start_time:.2f}s, final memory: {torch.cuda.memory_allocated(self.device) / 1024**3:.2f} GB")
->>>>>>> fd5c51c (fixes)
         
         # NOTE: SiT model stays on GPU for backward pass
         result = {
@@ -429,12 +379,8 @@ class SimpleOffloadedE2EModel:
     
     def finalize_step(self):
         """Offload all models after backward pass."""
-<<<<<<< HEAD
-        logger.info("Finalizing step - offloading all models")
-=======
         if self.debug:
             logger.info("Finalizing step - offloading all models")
->>>>>>> fd5c51c (fixes)
         self._ensure_on_cpu(self.sit_model, "SiT-XL")
         
         # Only offload models that were left on GPU during training
@@ -445,9 +391,5 @@ class SimpleOffloadedE2EModel:
             self._ensure_on_cpu(self.text_encoder_g, "CLIP-G")
         
         torch.cuda.empty_cache()
-<<<<<<< HEAD
-        logger.info(f"All models offloaded, memory: {torch.cuda.memory_allocated(self.device) / 1024**3:.2f} GB")
-=======
         if self.debug:
             logger.info(f"All models offloaded, memory: {torch.cuda.memory_allocated(self.device) / 1024**3:.2f} GB")
->>>>>>> fd5c51c (fixes)

@@ -40,17 +40,11 @@ from diffusers.training_utils import EMAModel
 
 from models.sit_xl import sit_xl_512m, sit_xl_1, sit_xl_2, sit_xl_3
 from utils.dataset import create_dataloader
-from utils.model_offload import ModelOffloader, SequentialOffloader, optimize_model_memory, calculate_model_memory
+from utils.model_offload import ModelOffloader, SequentialOffloader, KohyaSequentialOffloader, optimize_model_memory, calculate_model_memory
 from utils.optimizer_utils import create_optimizer_with_memory_efficient_mode, MemoryEfficientAdamW
 from utils.vae_utils import enable_vae_slicing
-<<<<<<< HEAD
-from utils.memory_efficient_training import create_low_memory_model
-from utils.onetrainer_offload import OptimizedE2EModel
-from utils.layer_offload_conductor import OffloadedE2EModel
-from utils.bulletproof_offload import SafeOffloadedE2EModel
-=======
->>>>>>> fd5c51c (fixes)
 from utils.simple_offload import SimpleOffloadedE2EModel
+from utils.kohya_offload import KohyaOffloadedE2EModel
 
 
 logger = logging.getLogger(__name__)
@@ -142,24 +136,10 @@ class E2EDiffusionModel:
         self.vae_decoder = None
         self.vae_slice_size = getattr(self, 'vae_slice_size', 1)
         
-<<<<<<< HEAD
-        # Set up offloading
-        if enable_model_offload:
-            # Get device from model parameters
-            device = next(sit_model.parameters()).device
-            self.offloader = SequentialOffloader(device=device)
-            self.modules_dict = {
-                "vae": self.vae,
-                "text_encoder_l": self.text_encoder_l,
-                "text_encoder_g": self.text_encoder_g,
-                "sit_model": self.sit_model
-            }
-=======
         # Simplified offloading - just store the flag
-        # Complex offloading is handled by SimpleOffloadedE2EModel
+        # Complex offloading is handled by specialized E2E model classes
         self.offloader = None
         self.modules_dict = None
->>>>>>> fd5c51c (fixes)
         
         # Set training mode for components
         if not enable_vae_training:
@@ -183,15 +163,7 @@ class E2EDiffusionModel:
         attention_mask_g: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Encode text prompt using both CLIP models."""
-<<<<<<< HEAD
-        # Ensure text encoders are on same device as inputs
-        if self.enable_model_offload:
-            input_device = input_ids_l.device
-            self.text_encoder_l.to(input_device)
-            self.text_encoder_g.to(input_device)
-=======
         # Text encoders should already be on correct device
->>>>>>> fd5c51c (fixes)
         
         # CLIP-L encoding
         text_outputs_l = self.text_encoder_l(
@@ -242,13 +214,8 @@ class E2EDiffusionModel:
         if attention_mask_g is not None:
             attention_mask_g = attention_mask_g.to(device)
             
-<<<<<<< HEAD
-        # Ensure images are in the correct dtype when not using offloading
-        if not self.enable_model_offload and hasattr(self.vae, 'dtype'):
-=======
         # Ensure images are in the correct dtype
         if hasattr(self.vae, 'dtype'):
->>>>>>> fd5c51c (fixes)
             vae_dtype = next(self.vae.parameters()).dtype
             images = images.to(dtype=vae_dtype)
         
@@ -257,17 +224,6 @@ class E2EDiffusionModel:
         
         # Encode images to latents
         vae_start = time.time()
-<<<<<<< HEAD
-        if self.enable_model_offload:
-            logger.info("Activating VAE...")
-            self.offloader.activate_module(self.modules_dict, "vae")
-            # Ensure VAE and input are on same device and dtype
-            vae_device = next(self.vae.parameters()).device
-            vae_dtype = next(self.vae.parameters()).dtype
-            images = images.to(device=vae_device, dtype=vae_dtype)
-            logger.info(f"VAE activated and data moved in {time.time() - vae_start:.2f}s")
-=======
->>>>>>> fd5c51c (fixes)
             
         if self.enable_vae_training:
             latents = self.vae.encode(images).latent_dist.sample()
@@ -276,13 +232,7 @@ class E2EDiffusionModel:
                 latents = self.vae.encode(images).latent_dist.sample()
         latents = latents * self.vae_scale_factor
         
-<<<<<<< HEAD
-        # Move latents back to the original device for subsequent processing
-        if self.enable_model_offload:
-            latents = latents.to(device)
-=======
         # Latents should already be on correct device
->>>>>>> fd5c51c (fixes)
         logger.info(f"VAE encoding completed in {time.time() - vae_start:.2f}s")
         
         # Sample noise
@@ -298,52 +248,16 @@ class E2EDiffusionModel:
         
         # Encode text
         text_start = time.time()
-<<<<<<< HEAD
-        if self.enable_model_offload:
-            logger.info("Activating text encoders...")
-            self.offloader.activate_module(self.modules_dict, "text_encoder_l")
-            # Ensure text encoders and inputs are on same device
-            text_encoder_device = next(self.text_encoder_l.parameters()).device
-            input_ids_l = input_ids_l.to(text_encoder_device)
-            input_ids_g = input_ids_g.to(text_encoder_device)
-            if attention_mask_l is not None:
-                attention_mask_l = attention_mask_l.to(text_encoder_device)
-            if attention_mask_g is not None:
-                attention_mask_g = attention_mask_g.to(text_encoder_device)
-            logger.info(f"Text encoders activated in {time.time() - text_start:.2f}s")
-=======
->>>>>>> fd5c51c (fixes)
             
         text_embeds, pooled_embeds = self.encode_prompt(
             input_ids_l, input_ids_g, attention_mask_l, attention_mask_g
         )
         
-<<<<<<< HEAD
-        # Move text embeddings back to the original device
-        if self.enable_model_offload:
-            text_embeds = text_embeds.to(device)
-            pooled_embeds = pooled_embeds.to(device)
-=======
         # Text embeddings should already be on correct device
->>>>>>> fd5c51c (fixes)
         logger.info(f"Text encoding completed in {time.time() - text_start:.2f}s")
         
         # Predict noise
         sit_start = time.time()
-<<<<<<< HEAD
-        if self.enable_model_offload:
-            logger.info("Activating SiT model...")
-            self.offloader.activate_module(self.modules_dict, "sit_model")
-            # Ensure SiT model and inputs are on same device and dtype
-            sit_device = next(self.sit_model.parameters()).device
-            sit_dtype = next(self.sit_model.parameters()).dtype
-            noisy_latents = noisy_latents.to(device=sit_device, dtype=sit_dtype)
-            timesteps = timesteps.to(sit_device)
-            text_embeds = text_embeds.to(device=sit_device, dtype=sit_dtype)
-            pooled_embeds = pooled_embeds.to(device=sit_device, dtype=sit_dtype)
-            logger.info(f"SiT model activated in {time.time() - sit_start:.2f}s")
-=======
->>>>>>> fd5c51c (fixes)
             
         noise_pred = self.sit_model(
             noisy_latents,
@@ -352,13 +266,7 @@ class E2EDiffusionModel:
             pooled_embeds,
         )
         
-<<<<<<< HEAD
-        # Move noise prediction back to the original device
-        if self.enable_model_offload:
-            noise_pred = noise_pred.to(device)
-=======
         # Noise prediction should already be on correct device
->>>>>>> fd5c51c (fixes)
         logger.info(f"SiT inference completed in {time.time() - sit_start:.2f}s")
         
         # Calculate loss
@@ -375,40 +283,14 @@ class E2EDiffusionModel:
         # VAE reconstruction loss (if training VAE)
         vae_loss = torch.tensor(0.0, device=device)
         if self.enable_vae_training:
-            if self.enable_model_offload:
-                self.offloader.activate_module(self.modules_dict, "vae")
-                # Ensure VAE and inputs are on same device and dtype
-                vae_device = next(self.vae.parameters()).device
-                vae_dtype = next(self.vae.parameters()).dtype
-                vae_latents = (latents / self.vae_scale_factor).to(device=vae_device, dtype=vae_dtype)
-                vae_images = images.to(device=vae_device, dtype=vae_dtype)
-            else:
-                vae_latents = latents / self.vae_scale_factor
-                vae_images = images
-                
+            vae_latents = latents / self.vae_scale_factor
             reconstructed = self.vae.decode(vae_latents).sample
-            vae_loss = F.mse_loss(reconstructed, vae_images)
-            
-<<<<<<< HEAD
-            # Move loss back to original device
-            if self.enable_model_offload:
-                vae_loss = vae_loss.to(device)
-=======
-            # VAE loss is already on correct device
->>>>>>> fd5c51c (fixes)
+            vae_loss = F.mse_loss(reconstructed, images)
         
         # Total loss
         total_loss = diffusion_loss + 0.01 * vae_loss  # Weight VAE loss lower
         
-<<<<<<< HEAD
-        # Offload all models to save memory after computation
-        if self.enable_model_offload:
-            offload_start = time.time()
-            self.offloader.offload_all_except(self.modules_dict, keep=None)
-            logger.info(f"Models offloaded in {time.time() - offload_start:.2f}s")
-=======
         # Model offloading handled by specific implementations
->>>>>>> fd5c51c (fixes)
         
         if torch.cuda.is_available():
             memory_allocated = torch.cuda.memory_allocated(device) / 1024**3
@@ -540,8 +422,8 @@ def train(args):
     )
     
     # Create E2E model with optimal offloading strategy
-    if args.cpu_offload_mode == "sequential":
-        logger.info("Using SimpleOffloadedE2EModel (Manual offloading)")
+    if args.cpu_offload_mode == "simple":
+        logger.info("Using SimpleOffloadedE2EModel (Basic offloading)")
         e2e_model = SimpleOffloadedE2EModel(
             sit_model=sit_model,
             vae=vae,
@@ -552,34 +434,36 @@ def train(args):
             enable_vae_training=args.train_vae,
             enable_text_encoder_training=args.train_text_encoder,
             mixed_precision=args.mixed_precision,
-<<<<<<< HEAD
-        )
-    elif args.cpu_offload_mode == "full":
-        logger.info(f"Using OptimizedE2EModel: {args.cpu_offload_mode}")
-        e2e_model = OptimizedE2EModel(
-=======
             debug=args.debug,
         )
-    elif args.cpu_offload_mode == "full":
-        logger.info("Using SimpleOffloadedE2EModel for full offloading")
-        e2e_model = SimpleOffloadedE2EModel(
->>>>>>> fd5c51c (fixes)
+    elif args.cpu_offload_mode == "kohya":
+        logger.info("Using KohyaOffloadedE2EModel (Block-wise offloading)")
+        e2e_model = KohyaOffloadedE2EModel(
             sit_model=sit_model,
             vae=vae,
             text_encoder_l=text_encoder_l,
             text_encoder_g=text_encoder_g,
             noise_scheduler=noise_scheduler,
             device=device,
-<<<<<<< HEAD
-            cpu_offload_mode=args.cpu_offload_mode,
             enable_vae_training=args.train_vae,
             enable_text_encoder_training=args.train_text_encoder,
-=======
+            mixed_precision=args.mixed_precision,
+            blocks_to_keep_on_gpu=2,  # Keep 2 SiT blocks on GPU
+            debug=args.debug,
+        )
+    elif args.cpu_offload_mode in ["sequential", "full"]:
+        logger.info("Using SimpleOffloadedE2EModel for sequential/full offloading")
+        e2e_model = SimpleOffloadedE2EModel(
+            sit_model=sit_model,
+            vae=vae,
+            text_encoder_l=text_encoder_l,
+            text_encoder_g=text_encoder_g,
+            noise_scheduler=noise_scheduler,
+            device=device,
             enable_vae_training=args.train_vae,
             enable_text_encoder_training=args.train_text_encoder,
             mixed_precision=args.mixed_precision,
             debug=args.debug,
->>>>>>> fd5c51c (fixes)
         )
     else:
         e2e_model = E2EDiffusionModel(
@@ -1010,8 +894,8 @@ def main():
     parser.add_argument("--enable_model_offload", action="store_true",
                         help="Enable sequential model offloading to CPU")
     parser.add_argument("--cpu_offload_mode", type=str, default="none",
-                        choices=["none", "sequential", "full"],
-                        help="CPU offloading strategy: none, sequential (OneTrainer style), or full")
+                        choices=["none", "simple", "sequential", "kohya", "full"],
+                        help="CPU offloading strategy: none, simple (basic), sequential, kohya (block-wise), or full")
     parser.add_argument("--memory_optimization_level", type=str, default="balanced",
                         choices=["minimal", "balanced", "aggressive"],
                         help="Memory optimization level")
@@ -1033,21 +917,18 @@ def main():
                         help="Launch TensorBoard automatically")
     parser.add_argument("--run_name", type=str, default=None,
                         help="Name for this training run (used in TensorBoard logs)")
-<<<<<<< HEAD
-=======
     parser.add_argument("--debug", action="store_true",
                         help="Enable debug logging for training")
->>>>>>> fd5c51c (fixes)
     
     args = parser.parse_args()
     args.output_dir = Path(args.output_dir)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     
     # Set up logging
-    log_level = logging.DEBUG if args.debug else logging.INFO
+    log_level = logging.DEBUG if getattr(args, 'debug', False) else logging.INFO
     logging.basicConfig(level=log_level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     
-    if args.debug:
+    if getattr(args, 'debug', False):
         logger.debug("Debug mode enabled - detailed logging will be shown")
     
     # Set random seeds

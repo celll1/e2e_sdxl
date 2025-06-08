@@ -8,6 +8,7 @@ tqdm>=4.65.0
 tensorboard>=2.13.0
 pillow>=9.5.0
 numpy>=1.24.0
-flash-attn>=2.3.0  # Optional for memory efficiency
-xformers>=0.0.22  # Optional for memory efficiency
-bitsandbytes>=0.41.0  # Optional for 8-bit optimizer
+# Optional dependencies for memory efficiency
+flash-attn>=2.3.0  # For memory-efficient attention
+xformers>=0.0.22  # Alternative memory-efficient attention
+bitsandbytes>=0.41.0  # For 8-bit optimizer support
