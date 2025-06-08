@@ -28,7 +28,7 @@ from diffusers.schedulers import (
     DPMSolverMultistepScheduler,
 )
 
-from models.sit_xl import sit_xl_2, sit_xl_3
+from models.sit_xl import sit_xl_1, sit_xl_2, sit_xl_3
 
 
 logging.basicConfig(level=logging.INFO)
@@ -301,40 +301,159 @@ def load_pipeline(
     logger.info(f"Loading pipeline from {checkpoint_path}")
     
     # Create SiT model
-    if model_size == "2b":
+    if model_size == "1b":
+        sit_model = sit_xl_1()
+    elif model_size == "2b":
         sit_model = sit_xl_2()
     elif model_size == "3b":
         sit_model = sit_xl_3()
     else:
         raise ValueError(f"Unknown model size: {model_size}")
     
-    # Load checkpoint
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
-    if "ema_model" in checkpoint:
-        logger.info("Using EMA weights")
-        sit_model.load_state_dict(checkpoint["ema_model"])
+    # Load checkpoint (supports both single file and directory format)
+    checkpoint_path = Path(checkpoint_path)
+    
+    if checkpoint_path.is_dir():
+        # Directory format checkpoint
+        logger.info("Loading from directory checkpoint")
+        
+        # Load SiT model
+        sit_checkpoint_path = checkpoint_path / "sit_model.pt"
+        if sit_checkpoint_path.exists():
+            sit_checkpoint = torch.load(sit_checkpoint_path, map_location="cpu")
+            
+            # Debug: print some keys
+            keys = list(sit_checkpoint.keys())
+            logger.info(f"Loaded {len(keys)} keys from checkpoint")
+            logger.info(f"First few keys: {keys[:3]}")
+            
+            # Remove '.module.' from keys (from DataParallel/DistributedDataParallel)
+            has_module_infix = any('.module.' in key for key in sit_checkpoint.keys())
+            logger.info(f"Has '.module.' infix: {has_module_infix}")
+            
+            if has_module_infix:
+                logger.info("Removing '.module.' from keys")
+                sit_checkpoint = {key.replace('.module.', '.'): value for key, value in sit_checkpoint.items()}
+                # Debug: print keys after fix
+                fixed_keys = list(sit_checkpoint.keys())
+                logger.info(f"Fixed keys (first few): {fixed_keys[:3]}")
+            
+            sit_model.load_state_dict(sit_checkpoint)
+            # Convert model to specified dtype after loading
+            sit_model = sit_model.to(dtype)
+        else:
+            # Check for EMA model
+            ema_checkpoint_path = checkpoint_path / "ema_model.pt"
+            if ema_checkpoint_path.exists():
+                logger.info("Using EMA weights")
+                ema_checkpoint = torch.load(ema_checkpoint_path, map_location="cpu")
+                
+                # Remove '.module.' from keys
+                if any('.module.' in key for key in ema_checkpoint.keys()):
+                    ema_checkpoint = {key.replace('.module.', '.'): value for key, value in ema_checkpoint.items()}
+                
+                sit_model.load_state_dict(ema_checkpoint)
+                # Convert model to specified dtype after loading
+                sit_model = sit_model.to(dtype)
+            else:
+                raise FileNotFoundError(f"No SiT model found in {checkpoint_path}")
+        
+        # Load VAE
+        logger.info("Loading VAE...")
+        vae_checkpoint_path = checkpoint_path / "vae.pt"
+        if vae_checkpoint_path.exists():
+            logger.info("Loading trained VAE from checkpoint")
+            vae = AutoencoderKL.from_pretrained(
+                "madebyollin/sdxl-vae-fp16-fix",
+                torch_dtype=dtype,
+            )
+            vae_checkpoint = torch.load(vae_checkpoint_path, map_location="cpu")
+            
+            # Remove '.module.' from keys
+            if any('.module.' in key for key in vae_checkpoint.keys()):
+                vae_checkpoint = {key.replace('.module.', '.'): value for key, value in vae_checkpoint.items()}
+            
+            vae.load_state_dict(vae_checkpoint)
+            # Convert to specified dtype
+            vae = vae.to(dtype)
+        else:
+            vae = AutoencoderKL.from_pretrained(
+                "madebyollin/sdxl-vae-fp16-fix",
+                torch_dtype=dtype,
+            )
+        
+        # Load text encoders
+        logger.info("Loading text encoders...")
+        text_encoder_l_path = checkpoint_path / "text_encoder_l.pt"
+        text_encoder_g_path = checkpoint_path / "text_encoder_g.pt"
+        
+        text_encoder_l = CLIPTextModel.from_pretrained(
+            "stabilityai/stable-diffusion-xl-base-1.0",
+            subfolder="text_encoder",
+            torch_dtype=dtype,
+        )
+        text_encoder_g = CLIPTextModelWithProjection.from_pretrained(
+            "stabilityai/stable-diffusion-xl-base-1.0",
+            subfolder="text_encoder_2",
+            torch_dtype=dtype,
+        )
+        
+        # Load trained text encoder weights if available
+        if text_encoder_l_path.exists():
+            logger.info("Loading trained CLIP-L from checkpoint")
+            text_encoder_l_checkpoint = torch.load(text_encoder_l_path, map_location="cpu")
+            
+            # Remove '.module.' from keys
+            if any('.module.' in key for key in text_encoder_l_checkpoint.keys()):
+                text_encoder_l_checkpoint = {key.replace('.module.', '.'): value for key, value in text_encoder_l_checkpoint.items()}
+            
+            text_encoder_l.load_state_dict(text_encoder_l_checkpoint)
+            # Convert to specified dtype
+            text_encoder_l = text_encoder_l.to(dtype)
+            
+        if text_encoder_g_path.exists():
+            logger.info("Loading trained CLIP-G from checkpoint")
+            text_encoder_g_checkpoint = torch.load(text_encoder_g_path, map_location="cpu")
+            
+            # Remove '.module.' from keys
+            if any('.module.' in key for key in text_encoder_g_checkpoint.keys()):
+                text_encoder_g_checkpoint = {key.replace('.module.', '.'): value for key, value in text_encoder_g_checkpoint.items()}
+            
+            text_encoder_g.load_state_dict(text_encoder_g_checkpoint)
+            # Convert to specified dtype
+            text_encoder_g = text_encoder_g.to(dtype)
+    
     else:
-        sit_model.load_state_dict(checkpoint)
-    
-    # Load VAE
-    logger.info("Loading VAE...")
-    vae = AutoencoderKL.from_pretrained(
-        "madebyollin/sdxl-vae-fp16-fix",
-        torch_dtype=dtype,
-    )
-    
-    # Load text encoders
-    logger.info("Loading text encoders...")
-    text_encoder_l = CLIPTextModel.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
-        subfolder="text_encoder",
-        torch_dtype=dtype,
-    )
-    
-    text_encoder_g = CLIPTextModelWithProjection.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
-        subfolder="text_encoder_2",
-        torch_dtype=dtype,
+        # Single file checkpoint (legacy format)
+        logger.info("Loading from single file checkpoint")
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        if "ema_model" in checkpoint:
+            logger.info("Using EMA weights")
+            sit_model.load_state_dict(checkpoint["ema_model"])
+        else:
+            sit_model.load_state_dict(checkpoint)
+        
+        # Convert model to specified dtype
+        sit_model = sit_model.to(dtype)
+        
+        # Load pretrained VAE and text encoders
+        logger.info("Loading pretrained VAE...")
+        vae = AutoencoderKL.from_pretrained(
+            "madebyollin/sdxl-vae-fp16-fix",
+            torch_dtype=dtype,
+        )
+        
+        logger.info("Loading pretrained text encoders...")
+        text_encoder_l = CLIPTextModel.from_pretrained(
+            "stabilityai/stable-diffusion-xl-base-1.0",
+            subfolder="text_encoder",
+            torch_dtype=dtype,
+        )
+        
+        text_encoder_g = CLIPTextModelWithProjection.from_pretrained(
+            "stabilityai/stable-diffusion-xl-base-1.0",
+            subfolder="text_encoder_2",
+            torch_dtype=dtype,
     )
     
     # Load tokenizers
@@ -348,31 +467,34 @@ def load_pipeline(
         subfolder="tokenizer_2",
     )
     
-    # Create scheduler
-    scheduler_config = {
+    # Create scheduler with appropriate parameters
+    base_config = {
         "num_train_timesteps": 1000,
         "beta_start": 0.00085,
         "beta_end": 0.012,
         "beta_schedule": "scaled_linear",
-        "clip_sample": False,
-        "set_alpha_to_one": False,
-        "steps_offset": 1,
-        "prediction_type": "epsilon",
     }
     
     if scheduler_type == "ddim":
+        scheduler_config = {**base_config, "clip_sample": False, "set_alpha_to_one": False, "steps_offset": 1, "prediction_type": "epsilon"}
         scheduler = DDIMScheduler(**scheduler_config)
     elif scheduler_type == "ddpm":
+        scheduler_config = {**base_config, "clip_sample": False, "prediction_type": "epsilon"}
         scheduler = DDPMScheduler(**scheduler_config)
     elif scheduler_type == "pndm":
+        scheduler_config = {**base_config, "skip_prk_steps": True, "set_alpha_to_one": False, "steps_offset": 1}
         scheduler = PNDMScheduler(**scheduler_config)
     elif scheduler_type == "lms":
+        scheduler_config = {**base_config}
         scheduler = LMSDiscreteScheduler(**scheduler_config)
     elif scheduler_type == "euler":
+        scheduler_config = {**base_config, "prediction_type": "epsilon"}
         scheduler = EulerDiscreteScheduler(**scheduler_config)
     elif scheduler_type == "euler_a":
+        scheduler_config = {**base_config, "prediction_type": "epsilon"}
         scheduler = EulerAncestralDiscreteScheduler(**scheduler_config)
     elif scheduler_type == "dpm":
+        scheduler_config = {**base_config, "prediction_type": "epsilon"}
         scheduler = DPMSolverMultistepScheduler(**scheduler_config)
     else:
         raise ValueError(f"Unknown scheduler type: {scheduler_type}")
@@ -405,7 +527,7 @@ def main():
     # Model arguments
     parser.add_argument("--checkpoint", type=str, required=True,
                         help="Path to model checkpoint")
-    parser.add_argument("--model_size", type=str, default="2b", choices=["2b", "3b"],
+    parser.add_argument("--model_size", type=str, default="2b", choices=["1b", "2b", "3b"],
                         help="Model size variant")
     
     # Generation arguments
@@ -441,7 +563,7 @@ def main():
     # Device arguments
     parser.add_argument("--device", type=str, default="cuda",
                         help="Device to run on")
-    parser.add_argument("--dtype", type=str, default="fp16",
+    parser.add_argument("--dtype", type=str, default="fp32",
                         choices=["fp32", "fp16"],
                         help="Data type for inference")
     

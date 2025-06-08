@@ -144,17 +144,22 @@ class SimpleOffloadedE2EModel:
         # Keep images in their original dtype for mixed precision
         images_vae = images
         
+        # Store VAE posterior for KL loss calculation
+        vae_posterior = None
+        
         # Use autocast for VAE encoding if mixed precision is enabled
         if self.mixed_precision:
             with autocast('cuda', dtype=torch.float16):
                 if self.enable_vae_training:
-                    latents = self.vae.encode(images_vae).latent_dist.sample()
+                    vae_posterior = self.vae.encode(images_vae).latent_dist
+                    latents = vae_posterior.sample()
                 else:
                     with torch.no_grad():
                         latents = self.vae.encode(images_vae).latent_dist.sample()
         else:
             if self.enable_vae_training:
-                latents = self.vae.encode(images_vae).latent_dist.sample()
+                vae_posterior = self.vae.encode(images_vae).latent_dist
+                latents = vae_posterior.sample()
             else:
                 with torch.no_grad():
                     latents = self.vae.encode(images_vae).latent_dist.sample()
@@ -339,7 +344,59 @@ class SimpleOffloadedE2EModel:
         target = target.to(noise_pred.device)
         
         diffusion_loss = torch.nn.functional.mse_loss(noise_pred, target)
+        
+        # VAE reconstruction loss (if training VAE)
         vae_loss = torch.tensor(0.0, device=self.device)
+        if self.enable_vae_training:
+            # Decode latents back to images
+            self._ensure_on_gpu(self.vae, "VAE")
+            vae_dtype = next(self.vae.parameters()).dtype
+            
+            # Scale latents back to VAE space
+            decoded_latents = (latents / self.vae_scale_factor).to(dtype=vae_dtype)
+            
+            if self.mixed_precision:
+                with autocast('cuda', dtype=torch.float16):
+                    reconstructed = self.vae.decode(decoded_latents).sample
+            else:
+                reconstructed = self.vae.decode(decoded_latents).sample
+            
+            # Calculate reconstruction loss  
+            # Ensure images and reconstructed are same type and range
+            target_images = images.to(dtype=reconstructed.dtype, device=reconstructed.device)
+            
+            # Normalize to [-1, 1] range if needed (SDXL VAE expects this)
+            if target_images.min() >= 0.0:  # If images are in [0,1] range
+                target_images = target_images * 2.0 - 1.0
+            
+            vae_reconstruction_loss = torch.nn.functional.mse_loss(reconstructed, target_images)
+            
+            # KL divergence loss
+            if vae_posterior is not None:
+                # KL divergence between VAE posterior and standard normal
+                vae_kl_loss = torch.distributions.kl_divergence(
+                    vae_posterior,
+                    torch.distributions.Normal(
+                        torch.zeros_like(vae_posterior.mean),
+                        torch.ones_like(vae_posterior.stddev)
+                    )
+                ).mean()
+            else:
+                vae_kl_loss = torch.tensor(0.0, device=self.device)
+            
+            # LPIPS perceptual loss (simplified - using L1 as proxy)
+            # Note: For full REPA-E implementation, you would use actual LPIPS
+            lpips_loss = torch.nn.functional.l1_loss(reconstructed, target_images)
+            
+            # Total VAE loss (following REPA-E formulation)
+            vae_loss = (vae_reconstruction_loss + 
+                       0.1 * lpips_loss +  # Perceptual loss weight
+                       0.0001 * vae_kl_loss)  # KL weight
+            
+            # Only offload VAE if not training it
+            if not self.enable_vae_training:
+                self._ensure_on_cpu(self.vae, "VAE")
+        
         total_loss = diffusion_loss + 0.01 * vae_loss
         
 <<<<<<< HEAD
@@ -350,11 +407,25 @@ class SimpleOffloadedE2EModel:
 >>>>>>> fd5c51c (fixes)
         
         # NOTE: SiT model stays on GPU for backward pass
-        return {
+        result = {
             "loss": total_loss,
             "diffusion_loss": diffusion_loss,
             "vae_loss": vae_loss,
         }
+        
+        # Add detailed VAE loss components if training VAE
+        if self.enable_vae_training and vae_loss.item() > 0:
+            try:
+                result.update({
+                    "vae_reconstruction_loss": vae_reconstruction_loss,
+                    "vae_kl_loss": vae_kl_loss,
+                    "vae_lpips_loss": lpips_loss,
+                })
+            except NameError:
+                # Variables not in scope - this is expected if VAE training is disabled
+                pass
+        
+        return result
     
     def finalize_step(self):
         """Offload all models after backward pass."""
